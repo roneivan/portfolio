@@ -1,0 +1,275 @@
+---
+title: "Analise de Dados de Covid Pelo Mundo"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  html_notebook: default
+editor_options: 
+  chunk_output_type: inline
+---
+
+## Objetivo:
+
+O objetivo deste notebook é avaliar os dados de covid pelo mundo, comparando a evolução de mortes entre os países com maior número de mortes. Também vamos avaliar a evolução do número de mortes após o surgimento da vacina. E por último vamos comparar a evolução do número de mortes entre os países mais ricos, e países mais pobres.
+
+## Análise inicial, e limpeza dos dados:
+
+#### Carregando pacores e dados. (Fonte: <https://covid19.who.int/data>)
+
+```{r}
+library("tidyverse")
+library("dplyr")
+library("forecast")
+library("PerformanceAnalytics")
+library("correlation")
+library("plotly")
+
+dados <- read.csv("WHO-COVID-19-global-data.csv")
+```
+
+#### Analisando o dataset:
+
+```{r}
+head(dados)
+tail(dados)
+glimpse(dados)
+```
+
+#### Verificando se o dataset possue NAs.
+
+-   O dataset possui NAs na variável Country, mas não utilizaremos.
+
+```{r}
+sum(is.na(dados))
+sum(is.na(dados$Country_code))
+```
+
+#### Verificando se o banco está desbalanceado:
+
+```{r}
+summary(unique(dados$Country))
+Country <- data.frame(table(dados$Country))
+summary(Country$Freq)
+```
+
+#### Convertendo a coluna Data para formato data:
+
+```{r}
+dados$Date_reported = as.Date(dados$Date_reported)
+glimpse(dados)
+```
+
+## Análise 1:
+
+#### Gerando um vetor com os 5 paises com o maior número de mortes por covid:
+
+```{r}
+Maior_Num_Mortes <- dados %>% group_by(Country) %>% summarise(Total_Deaths = sum(New_deaths)) %>% 
+  arrange(desc(Total_Deaths)) %>% head(5) %>% select(Country)
+Maior_Num_Mortes_Ajust <- Maior_Num_Mortes %>% pull(Country)
+```
+
+#### Gráfico de Boxplot das variáveis New_deaths e New_cases dos 5 paises com mais mortes, para verificar outliers:
+
+```{r}
+dados %>% filter(Country %in% Maior_Num_Mortes_Ajust) %>% 
+  ggplot() + geom_boxplot(aes(x = New_cases, color = Country)) +
+  labs(x = "Novos Casos",
+  title = "Número de novos casos dos Países com maior número de mortes por covid",
+  color = "País") +
+  theme_classic()
+dados %>% filter(Country %in% Maior_Num_Mortes_Ajust) %>% 
+  ggplot() + geom_boxplot(aes(x = New_deaths, color = Country)) +
+  labs(x = "Novas Mortes",
+  title = "Número de novas mortes dos Países com maior número de mortes por covid",
+  color = "País") +
+  theme_classic()
+```
+
+#### Gerando um gráfico comparando as novas mortes entre os 5 paises com mais mortes.
+
+-   Utilizado média móvel de 14 dias.
+
+```{r}
+dados %>% mutate(media_movel = ma(New_cases, order = 14)) %>% 
+  filter(Country %in% Maior_Num_Mortes_Ajust) %>% 
+  ggplot() +
+  geom_line(aes(x = Date_reported, y = media_movel, color = Country))+
+  labs(x = "Período",
+       y = "Qtd Novos Casos",
+       title = "Média móvel do número de casos dos Países com maior número de mortes",
+       color = "País") +
+  theme_classic()
+
+dados %>% mutate(media_movel = ma(New_deaths, order = 14)) %>% 
+  filter(Country %in% Maior_Num_Mortes_Ajust) %>% 
+  ggplot() +
+  geom_line(aes(x = Date_reported, y = media_movel, color = Country))+
+  labs(x = "Período",
+     y = "Qtd Novas Mortes",
+     title = "Média móvel do número de mortes dos Países com maior número de mortes",
+     color = "País") +
+  theme_classic()
+```
+
+#### Gerando um gráfico suavizado comparando mortes acumuladas e casos acumulados entre os 5 paises com mais mortes.
+
+```{r}
+dados %>% 
+  filter(Country %in% Maior_Num_Mortes_Ajust) %>% 
+  mutate(Country = factor(Country, levels = Maior_Num_Mortes_Ajust)) %>% 
+  ggplot() +
+  geom_smooth(aes(x = Date_reported, y = Cumulative_cases, color = Country))+
+  labs(x = "Período",
+       y = "Qtd Casos Acumulados",
+       title = "Casos Acumulados dos Países com maior número de mortes",
+       color = "País") +
+  theme_classic()
+
+dados %>% 
+  filter(Country %in% Maior_Num_Mortes_Ajust) %>% 
+  mutate(Country = factor(Country, levels = Maior_Num_Mortes_Ajust)) %>% 
+  ggplot() +
+  geom_smooth(aes(x = Date_reported, y = Cumulative_deaths, color = Country))+
+  labs(x = "Período",
+       y = "Qtd mortes Acumuladas",
+       title = "Mortes Acumuladas dos Países com maior número de mortes",
+       color = "País") +
+  theme_classic()
+```
+
+#### Verificando correlação entre variáveios do dataset para o Brasil:
+
+```{r}
+chart.Correlation((select(filter(dados, Country=="Brazil"),5:8)), histogram = TRUE)
+```
+
+## Análise 2:
+
+#### As vacinações começaram no dia 8/12/2020 na inglaterra, logo depois em outros paises. Vamos ver qual o impacto nas novas mortes:
+
+```{r}
+dados %>% filter(Country %in% Maior_Num_Mortes_Ajust) %>% 
+  mutate(media_movel = ma(New_deaths, order = 14)) %>% 
+  mutate(vacinacao = as.factor(ifelse(Date_reported > as.Date.character("2020-12-08"),"Sim","Não"))) %>% 
+  ggplot() +
+  geom_line(aes(x = Date_reported, y = media_movel, color = Country, linetype = vacinacao), na.rm = TRUE)+
+  labs(x = "Período",
+       y = "Qtd Novas Mortes",
+       title = "Média móvel do número de mortes dos Países com maior número de mortes",
+       subtitle = "Data da primeira vacinação 12/08/2020",
+       color = "País",
+       linetype = "Vacinação",) +
+  theme_classic()
+```
+
+## Análise 3:
+
+#### Importando dados econômicos para verificar se existe diferença de mortes entre os paises ricos e pobres:
+
+-   Dados de PIB Fonte: <https://datatopics.worldbank.org/world-development-indicators/>
+
+```{r}
+Country_Data <- read.csv("Country_Data.csv")
+head(Country_Data)
+tail(Country_Data)
+```
+
+#### Removendo ultimas linhas para limpar o dataset:
+
+```{r}
+Country_Data = Country_Data[1:434,]
+```
+
+#### Renomeando variáveis para simplificar:
+
+```{r}
+names(Country_Data) = c("Country_Name", "Country_Code", "Series_Name", "Series_Code", "Y2020")
+#Convertendo para numérico:
+Country_Data$Y2020 = as.numeric(Country_Data$Y2020)
+```
+
+#### Criando vetor com os 5 países com os maiores PIB:
+
+```{r}
+rich <- Country_Data %>% filter(Series_Code == "NY.GDP.MKTP.CD", !is.na(Y2020)) %>% arrange(Y2020) %>% tail(5) %>% select(Country_Name)
+rich_Ajust <- rich %>% pull(Country_Name)
+```
+
+#### População total dos 5 paises ricos selecionados:
+
+```{r}
+pop_rich <- Country_Data %>% filter(Country_Name %in% rich_Ajust, Series_Code == "SP.POP.TOTL", !is.na(Y2020)) %>% select(Y2020) %>% sum()
+```
+
+#### Renomeando alguns campos, por divergência no nome dos países:
+
+```{r}
+rich_Ajust[1]="The United Kingdom"
+rich_Ajust[5]="United States of America"
+```
+
+#### Foi verificado que os 5 paises mais probres não possuem dados de covid coerentes, então, foi decidido utilizar os dados dos 100 paises mais pobres, e separar os 5 paises com maiores mortes por covid dentro deles.
+
+```{r}
+poor <- Country_Data %>% filter(Series_Code == "NY.GDP.MKTP.CD", !is.na(Y2020)) %>% arrange(Y2020) %>% head(100) %>% select(Country_Name)
+poor_Ajust <- poor %>% pull(Country_Name)
+
+poor_Ajust2 <- dados %>% filter(Country %in% poor_Ajust) %>% 
+  group_by(Country) %>% summarise(Total_Deaths = sum(New_deaths)) %>% arrange(desc(Total_Deaths)) %>% head()
+poor_Ajust2 <- poor_Ajust2 %>% pull(Country)
+```
+
+#### População total dos 5 paises pobres selecionados:
+
+```{r}
+pop_poor <- Country_Data %>% filter(Country_Name %in% poor_Ajust2, Series_Code == "SP.POP.TOTL", !is.na(Y2020)) %>% select(Y2020) %>% sum()
+```
+
+#### Plotando os paises mais pobres e ricos:
+
+```{r}
+dados %>% filter(Country %in% rich_Ajust) %>% 
+  mutate(media_movel = ma(tsclean(New_deaths), order = 14)) %>% 
+  mutate(vacinacao = as.factor(ifelse(Date_reported > as.Date.character("2020-12-08"),"Sim","Não"))) %>% 
+  ggplot() +
+  geom_line(aes(x = Date_reported, y = media_movel, color = Country, linetype = vacinacao), na.rm = TRUE)+
+  labs(x = "Período",
+       y = "Qtd Novas Mortes",
+       title = "Média móvel do número de mortes",
+       subtitle = "Dos Países com maior número de mortes, dentre os 100 paises mais pobres.
+Data da primeira vacinação 12/08/2020",
+       color = "País",
+       linetype = "Vacinação",) +
+  theme_classic()
+
+dados %>% filter(Country %in% poor_Ajust2) %>% 
+  mutate(media_movel = ma(tsclean(New_deaths), order = 14)) %>% 
+  mutate(vacinacao = as.factor(ifelse(Date_reported > as.Date.character("2020-12-08"),"Sim","Não"))) %>% 
+  ggplot() +
+  geom_line(aes(x = Date_reported, y = media_movel, color = Country, linetype = vacinacao), na.rm = TRUE)+
+  labs(x = "Período",
+       y = "Qtd Novas Mortes",
+       title = "Média móvel do número de mortes",
+       subtitle = "Dos Países com maior número de mortes, dentre os 100 paises mais pobres.
+Data da primeira vacinação 12/08/2020",
+       color = "País",
+       linetype = "Vacinação",) +
+  theme_classic()
+```
+
+#### Plotando um grafico resumindo as novas mortes divido pela população dos paises ricos e pobres:
+
+```{r}
+ggplot() +
+  geom_smooth(data = (dados %>% filter(Country %in% poor_Ajust2)),
+   aes(x = Date_reported, y = (New_deaths/pop_poor), color = "Paises pobres"), na.rm = TRUE) +
+  geom_smooth(data = (dados %>% filter(Country %in% rich_Ajust)),
+   aes(x = Date_reported, y = (New_deaths/pop_rich), color = "Paises ricos"), na.rm = TRUE) +
+  labs(x = "Período",
+       y = "Qtd Novas Mortes",
+       title = "Novas mortes proporcionais ao número de habitante",
+       subtitle = "5 países mais ricos e 5 países do grupo dos 100 mais pobres",) +
+  theme_classic()
+```
